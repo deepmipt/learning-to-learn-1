@@ -31,8 +31,9 @@ def run_epoch(sess, cost_op, ops, reset, num_unrolls):
   """Runs one optimization epoch."""
   start = timer()
   sess.run(reset)
-  for _ in xrange(num_unrolls):
+  for i in xrange(num_unrolls):
     cost = sess.run([cost_op] + ops)[0]
+    # print('log cost on step %s:' % i, np.log10(cost))
   return timer() - start, cost
 
 
@@ -60,7 +61,7 @@ def get_default_net_config(name, path):
   }
 
 
-def get_config(problem_name, path=None):
+def get_config(problem_name, *args, path=None):
   """Returns problem configuration."""
   if problem_name == "simple":
     problem = problems.simple()
@@ -122,7 +123,27 @@ def get_config(problem_name, path=None):
     fc_vars += ["mlp/linear_{}/b".format(i) for i in xrange(2)]
     fc_vars += ["mlp/batch_norm/beta"]
     net_assignments = [("conv", conv_vars), ("fc", fc_vars)]
+  elif problem_name == "lstm_lm":
+    mode = "train" if path is None else "test"
+    train_dataset_name = args[0]
+    first_train_batch_dataset_name = args[1]
+    problem = problems.lstm_lm(train_dataset_name, first_train_batch_dataset_name, mode=mode)
+    net_config = {"cw": get_default_net_config("cw", path)}
+    net_assignments = None
+  elif problem_name == "splitted_lstm_lm":
+    mode = "train" if path is None else "test"
+    train_dataset_name = args[0]
+    first_train_batch_dataset_name = args[1]
+    problem = problems.splitted_lstm_lm(train_dataset_name, first_train_batch_dataset_name, mode=mode)
+    net_config = {"cw": get_default_net_config("cw", path)}
+    net_assignments = None
+  elif problem_name == "":
+    mode = "train" if path is None else "test"
+    problem = problems.mnist(layers=(20,), mode=mode)
+    net_config = {"cw": get_default_net_config("cw", path)}
+    net_assignments = None
   else:
     raise ValueError("{} is not a valid problem".format(problem_name))
 
   return problem, net_config, net_assignments
+

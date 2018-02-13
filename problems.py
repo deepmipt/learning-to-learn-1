@@ -26,8 +26,13 @@ from six.moves import urllib
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import sonnet as snt
 import tensorflow as tf
+import numpy as np
+
+from tensorflow.python.ops.init_ops import Initializer
 
 from tensorflow.contrib.learn.python.learn.datasets import mnist as mnist_dataset
+
+NUMBER_OF_CHARACTERS = 256
 
 
 _nn_initializers = {
@@ -273,5 +278,291 @@ def cifar10(path,  # pylint: disable=invalid-name
 
     output = network(image_batch)
     return _xent_loss(output, label_batch)
+
+  return build
+
+
+def lstm_cell(inp, hidden, matrix, bias):
+    hidden_size = hidden[0].get_shape().as_list()[1]
+    x = tf.concat([inp, hidden[0]], 1)
+    conc = tf.matmul(x, matrix) + bias
+    tanh_arg, sigm_arg = tf.split(conc, [hidden_size, 3*hidden_size], axis=1)
+    j = tf.tanh(tanh_arg)
+    i_gate, f_gate, o_gate = tf.split(tf.sigmoid(sigm_arg), 3, axis=1)
+    new_c = hidden[1] * f_gate + j * i_gate
+    new_h = tf.tanh(new_c) * o_gate
+    return new_h, [new_h, new_c]
+
+
+def unrolled_lstm(inputs, matrix, bias, hidden):
+    inps = tf.unstack(inputs)
+    outputs = list()
+    for inp in inps:
+        output, hidden = lstm_cell(inp, hidden, matrix, bias)
+        outputs.append(output)
+    return tf.stack(outputs), hidden
+
+
+def lstm_lm(dataset_name,
+            first_batch_dataset_name,
+            hidden_size=1024,
+            optimizee_unrollings=10,
+          batch_size=128,
+          mode="train"):
+  """Mnist classification with a multi-layer perceptron."""
+  with open(first_batch_dataset_name, 'r') as f:
+      first_batch_text = f.read()
+
+  first_batch = tf.reshape(
+      tf.cast(
+          tf.decode_raw(
+              tf.constant(first_batch_text),
+              tf.uint8),
+          tf.float32),
+      [1, len(first_batch_text)])
+  embeddings = tf.constant(
+      [[1. if i == j else 0. for i in range(NUMBER_OF_CHARACTERS)] for j in range(NUMBER_OF_CHARACTERS)])
+  # embeddings = tf.Print(embeddings, [embeddings], summarize=66000)
+  reader = tf.FixedLengthRecordReader(record_bytes=(optimizee_unrollings + 1) * batch_size)
+  saved_batch = tf.get_variable(
+      "saved_batch",
+      initializer=first_batch,
+      trainable=False)
+  _, record = reader.read(tf.train.string_input_producer([dataset_name]))
+  # f = open(dataset_name, 'r')
+  # print('(lstm_lm)f:', f)
+  # print('(lstm_lm)record.shape:', record.get_shape().as_list())
+  decoded = tf.cast(
+      tf.reshape(
+          tf.decode_raw(
+              record, tf.uint8),
+          [(optimizee_unrollings + 1), batch_size]),
+      tf.int32)
+  # print('(lstm_lm)decoded.shape:', decoded.get_shape().as_list())
+  q = tf.FIFOQueue(10, [tf.int32])
+  enq = q.enqueue(decoded)
+  tf.train.add_queue_runner(tf.train.QueueRunner(q, [enq]))
+  # bias = tf.Print(bias, [bias], message='bias: ', summarize=300)
+
+  def build():
+    lstm_matrix = tf.get_variable(
+      'lstm_matrix',
+      shape=[NUMBER_OF_CHARACTERS + hidden_size, 4 * hidden_size],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(NUMBER_OF_CHARACTERS + hidden_size)))
+    bias = tf.get_variable(
+      'lstm_bias',
+      shape=[4 * hidden_size],
+      dtype=tf.float32,
+      initializer=tf.zeros_initializer()
+    )
+    output_matrix = tf.get_variable(
+      'output_matrix',
+      shape=[hidden_size, NUMBER_OF_CHARACTERS],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(hidden_size)))
+    saved_state = list()
+    for i in range(2):
+      saved_state.append(
+          tf.get_variable(
+              'h%s' % i,
+              shape=[batch_size, hidden_size],
+              dtype=tf.float32, initializer=tf.zeros_initializer(), trainable=False))
+    dec = tf.reshape(q.dequeue(), [(optimizee_unrollings + 1), batch_size])
+    # dec = tf.Print(dec, [dec])
+    # print('(lstm_lm)dec.shape:', dec.get_shape().as_list())
+    main, last = tf.split(dec, [optimizee_unrollings, 1])
+    # print('(lstm_lm)main.shape:', main.get_shape().as_list())
+    # print('(lstm_lm)saved_batch.shape:', saved_batch.get_shape().as_list())
+    inputs = tf.concat([tf.cast(saved_batch, tf.int32), main], 0)
+    # print('(lstm_lm after concat)inputs.shape:', inputs.get_shape().as_list())
+    labels = dec
+
+    # check_inputs = tf.reshape(tf.slice(inputs, [0, 0], [(optimizee_unrollings + 1), 1]), [-1])
+    # check_labels = tf.reshape(tf.slice(labels, [0, 0], [(optimizee_unrollings + 1), 1]), [-1])
+    # inputs = tf.Print(inputs, [check_inputs], message='check_inputs: ', summarize=1000)
+    # labels = tf.Print(labels, [check_labels], message='check_labels: ', summarize=1000)
+
+    inputs = tf.nn.embedding_lookup(embeddings, inputs)
+    # print('(lstm_lm)inputs.shape:', inputs.get_shape().as_list())
+    outputs, final_state = unrolled_lstm(inputs, lstm_matrix, bias, saved_state)
+    outputs = tf.reshape(outputs, [-1, hidden_size])
+    logits = tf.matmul(outputs, output_matrix)
+
+
+    # lstm = snt.LSTM(NUMBER_OF_CHARACTERS)
+    # initial_state = lstm.initial_state(batch_size)
+    # saved_state = tf.get_variable(
+    #     "saved_state",
+    #     initializer=initial_state,
+    #     trainable=False)
+    # outputs, final_state = tf.nn.dynamic_rnn(
+    #   lstm, inputs, initial_state=initial_state, time_major=True)
+    # print('(lstm_lm)outputs.shape:', outputs.get_shape().as_list())
+    # print('(lstm_lm)final_state.shape:', final_state.get_shape().as_list())
+    # Network.
+    save_ops = list()
+    save_ops.append(tf.assign(saved_batch, tf.cast(last, tf.float32)))
+    for saved, final in zip(saved_state, final_state):
+        save_ops.append(tf.assign(saved, final))
+    labels = tf.reshape(labels, [-1])
+    # print('(lstm_lm)outputs.shape:', outputs.get_shape().as_list())
+    # print('(lstm_lm)labels.shape:', labels.get_shape().as_list())
+    with tf.control_dependencies(save_ops):
+      loss = _xent_loss(
+          logits,
+          labels)
+    return loss
+
+  return build
+
+
+def splitted_lstm_lm(dataset_name,
+            first_batch_dataset_name,
+            hidden_size=320,
+            optimizee_unrollings=10,
+          batch_size=128,
+          mode="train"):
+  """Mnist classification with a multi-layer perceptron."""
+  with open(first_batch_dataset_name, 'r') as f:
+      first_batch_text = f.read()
+
+  first_batch = tf.reshape(
+      tf.cast(
+          tf.decode_raw(
+              tf.constant(first_batch_text),
+              tf.uint8),
+          tf.float32),
+      [1, len(first_batch_text)])
+  embeddings = tf.constant(
+      [[1. if i == j else 0. for i in range(NUMBER_OF_CHARACTERS)] for j in range(NUMBER_OF_CHARACTERS)])
+  # embeddings = tf.Print(embeddings, [embeddings], summarize=66000)
+  reader = tf.FixedLengthRecordReader(record_bytes=(optimizee_unrollings + 1) * batch_size)
+  saved_batch = tf.get_variable(
+      "saved_batch",
+      initializer=first_batch,
+      trainable=False)
+  _, record = reader.read(tf.train.string_input_producer([dataset_name]))
+  # f = open(dataset_name, 'r')
+  # print('(lstm_lm)f:', f)
+  # print('(lstm_lm)record.shape:', record.get_shape().as_list())
+  decoded = tf.cast(
+      tf.reshape(
+          tf.decode_raw(
+              record, tf.uint8),
+          [(optimizee_unrollings + 1), batch_size]),
+      tf.int32)
+  # print('(lstm_lm)decoded.shape:', decoded.get_shape().as_list())
+  q = tf.FIFOQueue(10, [tf.int32])
+  enq = q.enqueue(decoded)
+  tf.train.add_queue_runner(tf.train.QueueRunner(q, [enq]))
+  # bias = tf.Print(bias, [bias], message='bias: ', summarize=300)
+
+  def build():
+    i_gate_matrix = tf.get_variable(
+      'i_gate_matrix',
+      shape=[NUMBER_OF_CHARACTERS + hidden_size, hidden_size],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(NUMBER_OF_CHARACTERS + hidden_size)))
+    f_gate_matrix = tf.get_variable(
+      'f_gate_matrix',
+      shape=[NUMBER_OF_CHARACTERS + hidden_size, hidden_size],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(NUMBER_OF_CHARACTERS + hidden_size)))
+    o_gate_matrix = tf.get_variable(
+      'o_gate_matrix',
+      shape=[NUMBER_OF_CHARACTERS + hidden_size, hidden_size],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(NUMBER_OF_CHARACTERS + hidden_size)))
+    j_matrix = tf.get_variable(
+      'j_matrix',
+      shape=[NUMBER_OF_CHARACTERS + hidden_size, hidden_size],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(NUMBER_OF_CHARACTERS + hidden_size)))
+    lstm_matrix = tf.concat([j_matrix, i_gate_matrix, f_gate_matrix, o_gate_matrix], 1)
+
+    i_gate_bias = tf.get_variable(
+      'i_gate_bias',
+      shape=[hidden_size],
+      dtype=tf.float32,
+      initializer=tf.zeros_initializer()
+    )
+    f_gate_bias = tf.get_variable(
+      'f_gate_bias',
+      shape=[hidden_size],
+      dtype=tf.float32,
+      initializer=tf.zeros_initializer()
+    )
+    o_gate_bias = tf.get_variable(
+      'o_gate_bias',
+      shape=[hidden_size],
+      dtype=tf.float32,
+      initializer=tf.zeros_initializer()
+    )
+    j_bias = tf.get_variable(
+      'j_bias',
+      shape=[hidden_size],
+      dtype=tf.float32,
+      initializer=tf.zeros_initializer()
+    )
+    bias = tf.concat([j_bias, i_gate_bias, f_gate_bias, o_gate_bias], 0)
+
+    output_matrix = tf.get_variable(
+      'output_matrix',
+      shape=[hidden_size, NUMBER_OF_CHARACTERS],
+      dtype=tf.float32,
+      initializer=tf.truncated_normal_initializer(stddev=4. / np.sqrt(hidden_size)))
+    saved_state = list()
+    for i in range(2):
+      saved_state.append(
+          tf.get_variable(
+              'h%s' % i,
+              shape=[batch_size, hidden_size],
+              dtype=tf.float32, initializer=tf.zeros_initializer(), trainable=False))
+    dec = tf.reshape(q.dequeue(), [(optimizee_unrollings + 1), batch_size])
+    # dec = tf.Print(dec, [dec])
+    # print('(lstm_lm)dec.shape:', dec.get_shape().as_list())
+    main, last = tf.split(dec, [optimizee_unrollings, 1])
+    # print('(lstm_lm)main.shape:', main.get_shape().as_list())
+    # print('(lstm_lm)saved_batch.shape:', saved_batch.get_shape().as_list())
+    inputs = tf.concat([tf.cast(saved_batch, tf.int32), main], 0)
+    # print('(lstm_lm after concat)inputs.shape:', inputs.get_shape().as_list())
+    labels = dec
+
+    # check_inputs = tf.reshape(tf.slice(inputs, [0, 0], [(optimizee_unrollings + 1), 1]), [-1])
+    # check_labels = tf.reshape(tf.slice(labels, [0, 0], [(optimizee_unrollings + 1), 1]), [-1])
+    # inputs = tf.Print(inputs, [check_inputs], message='check_inputs: ', summarize=1000)
+    # labels = tf.Print(labels, [check_labels], message='check_labels: ', summarize=1000)
+
+    inputs = tf.nn.embedding_lookup(embeddings, inputs)
+    # print('(lstm_lm)inputs.shape:', inputs.get_shape().as_list())
+    outputs, final_state = unrolled_lstm(inputs, lstm_matrix, bias, saved_state)
+    outputs = tf.reshape(outputs, [-1, hidden_size])
+    logits = tf.matmul(outputs, output_matrix)
+
+
+    # lstm = snt.LSTM(NUMBER_OF_CHARACTERS)
+    # initial_state = lstm.initial_state(batch_size)
+    # saved_state = tf.get_variable(
+    #     "saved_state",
+    #     initializer=initial_state,
+    #     trainable=False)
+    # outputs, final_state = tf.nn.dynamic_rnn(
+    #   lstm, inputs, initial_state=initial_state, time_major=True)
+    # print('(lstm_lm)outputs.shape:', outputs.get_shape().as_list())
+    # print('(lstm_lm)final_state.shape:', final_state.get_shape().as_list())
+    # Network.
+    save_ops = list()
+    save_ops.append(tf.assign(saved_batch, tf.cast(last, tf.float32)))
+    for saved, final in zip(saved_state, final_state):
+        save_ops.append(tf.assign(saved, final))
+    labels = tf.reshape(labels, [-1])
+    # print('(lstm_lm)outputs.shape:', outputs.get_shape().as_list())
+    # print('(lstm_lm)labels.shape:', labels.get_shape().as_list())
+    with tf.control_dependencies(save_ops):
+      loss = _xent_loss(
+          logits,
+          labels)
+    return loss
 
   return build

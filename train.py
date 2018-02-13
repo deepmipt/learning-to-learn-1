@@ -25,6 +25,9 @@ import tensorflow as tf
 
 from tensorflow.contrib.learn.python.learn import monitored_session as ms
 
+from some_useful_functions import create_path, add_postfix_to_path_string
+from parade import parade #, organise_text_dataset_for_lm_task
+
 import meta
 import util
 
@@ -42,23 +45,45 @@ flags.DEFINE_integer("evaluation_epochs", 20, "Number of evaluation epochs.")
 flags.DEFINE_string("problem", "simple", "Type of problem.")
 flags.DEFINE_integer("num_steps", 100,
                      "Number of optimization steps per epoch.")
+flags.DEFINE_integer("batch_size", 128,
+                     "Size of a batch passed to optimizee during training")
+flags.DEFINE_string("train_dataset", None,
+                     "Path to file containing train dataset")
+flags.DEFINE_string("valid_dataset", None,
+                     "Path to file containing validation dataset")
+flags.DEFINE_boolean("parade_tokens", False,
+                     "If language model task is performed tokens have to be reordered in the way that"
+                     " that allows tf.FixedLengthRecordReader to get batch every read")
 flags.DEFINE_integer("unroll_length", 20, "Meta-optimizer unroll length.")
 flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 flags.DEFINE_boolean("second_derivatives", False, "Use second derivatives.")
-
+#
+# if FLAGS.parade_tokens:
+#   if FLAGS.train_dataset is not None:
+#     main_parade_path = add_postfix_to_path_string(FLAGS.train_dataset, '_parade')
+#     first_batch_parade_path = add_postfix_to_path_string(FLAGS.train_dataset, '_parade_first_batch')
+#     if not os.path.exists(main_parade_path) or not os.path.exists(first_batch_parade_path):
+#       [main_parade_path, first_batch_parade_path] = parade(FLAGS.train_dataset, FLAGS.batch_size, True)
+# else:
+#   main_parade_path = None
+#   first_batch_parade_path = None
+if FLAGS.parade_tokens:
+    main_parade_path, first_batch_parade_path = parade(
+        FLAGS.train_dataset, FLAGS.batch_size, True)
 
 def main(_):
   # Configuration.
   num_unrolls = FLAGS.num_steps // FLAGS.unroll_length
 
-  if FLAGS.save_path is not None:
-    if os.path.exists(FLAGS.save_path):
-      raise ValueError("Folder {} already exists".format(FLAGS.save_path))
-    else:
-      os.mkdir(FLAGS.save_path)
+  # if FLAGS.save_path is not None:
+  #   if os.path.exists(FLAGS.save_path):
+  #     raise ValueError("Folder {} already exists".format(FLAGS.save_path))
+  #   else:
+  #     os.mkdir(FLAGS.save_path)
 
   # Problem.
-  problem, net_config, net_assignments = util.get_config(FLAGS.problem)
+  problem, net_config, net_assignments = util.get_config(
+      FLAGS.problem, main_parade_path, first_batch_parade_path)
 
   # Optimizer setup.
   optimizer = meta.MetaOptimizer(**net_config)

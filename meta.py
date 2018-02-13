@@ -107,6 +107,8 @@ def _get_variables(func):
   def custom_getter(getter, name, **kwargs):
     trainable = kwargs["trainable"]
     kwargs["trainable"] = False
+    # print('(_get_variables)name:', name)
+    # print('(_get_variables)kwargs:', kwargs)
     variable = getter(name, **kwargs)
     if trainable:
       variables.append(variable)
@@ -281,6 +283,7 @@ class MetaOptimizer(object):
     # Construct an instance of the problem only to grab the variables. This
     # loss will never be evaluated.
     x, constants = _get_variables(make_loss)
+    # print('(MetaOptimizer.meta_loss)x:', x)
 
     print("Optimizee variables")
     print([op.name for op in x])
@@ -306,44 +309,49 @@ class MetaOptimizer(object):
               name="state", trainable=False))
 
     def update(net, fx, x, state):
+      # print('(MetaOptimizer.meta_loss.update)fx:', fx)
+      # print('(MetaOptimizer.meta_loss.update)x:', x)
+      # print('(MetaOptimizer.meta_loss.update)state:', state)
+      # print('(MetaOptimizer.meta_loss.update)net:', net)
       """Parameter and RNN state update."""
       with tf.name_scope("gradients"):
         gradients = tf.gradients(fx, x)
-
+        # print('(MetaOptimizer.meta_loss.update)gradients:', gradients)
         # Stopping the gradient here corresponds to what was done in the
         # original L2L NIPS submission. However it looks like things like
         # BatchNorm, etc. don't support second-derivatives so we still need
         # this term.
+
         if not second_derivatives:
           gradients = [tf.stop_gradient(g) for g in gradients]
 
       with tf.name_scope("deltas"):
         deltas, state_next = zip(*[net(g, s) for g, s in zip(gradients, state)])
         state_next = list(state_next)
-
       return deltas, state_next
 
     def time_step(t, fx_array, x, state):
       """While loop body."""
       x_next = list(x)
       state_next = []
-
       with tf.name_scope("fx"):
+        # print('(MetaOptimizer.meta_loss.time_step)make_loss:', make_loss)
+        # print('(MetaOptimizer.meta_loss.time_step)x:', x)
         fx = _make_with_custom_variables(make_loss, x)
+        # print('(MetaOptimizer.meta_loss.time_step)fx:', fx)
         fx_array = fx_array.write(t, fx)
-
       with tf.name_scope("dx"):
+        # print('(MetaOptimizer.meta_loss.time_step)subsets:', subsets)
+        # print('(MetaOptimizer.meta_loss.time_step)net_keys:', net_keys)
+        # print('(MetaOptimizer.meta_loss.time_step)state:', state)
         for subset, key, s_i in zip(subsets, net_keys, state):
           x_i = [x[j] for j in subset]
           deltas, s_i_next = update(nets[key], fx, x_i, s_i)
-
           for idx, j in enumerate(subset):
             x_next[j] += deltas[idx]
           state_next.append(s_i_next)
-
       with tf.name_scope("t_next"):
         t_next = t + 1
-
       return t_next, fx_array, x_next, state_next
 
     # Define the while loop.
@@ -369,18 +377,15 @@ class MetaOptimizer(object):
                    x + constants)
       # Empty array as part of the reset process.
       reset = [tf.variables_initializer(variables), fx_array.close()]
-
     # Operator to update the parameters and the RNN state after our loop, but
     # during an epoch.
     with tf.name_scope("update"):
       update = (nest.flatten(_nested_assign(x, x_final)) +
                 nest.flatten(_nested_assign(state, s_final)))
-
     # Log internal variables.
     for k, net in nets.items():
       print("Optimizer '{}' variables".format(k))
       print([op.name for op in snt.get_variables_in_module(net)])
-
     return MetaLoss(loss, update, reset, fx_final, x_final)
 
   def meta_minimize(self, make_loss, len_unroll, learning_rate=0.01, **kwargs):

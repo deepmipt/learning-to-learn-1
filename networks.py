@@ -36,7 +36,8 @@ def factory(net, net_options=(), net_path=None):
 
   net_class = getattr(sys.modules[__name__], net)
   net_options = dict(net_options)
-
+  print('(networks.factory)net_class:', net_class)
+  print('(networks.factory)net_options:', net_options)
   if net_path:
     with open(net_path, "rb") as f:
       net_options["initializer"] = pickle.load(f)
@@ -58,14 +59,12 @@ def save(network, sess, filename=None):
   if filename:
     with open(filename, "wb") as f:
       pickle.dump(to_save, f)
-
   return to_save
 
 
 @six.add_metaclass(abc.ABCMeta)
 class Network(snt.RNNCore):
   """Base class for meta-optimizer networks."""
-
   @abc.abstractmethod
   def initial_state_for_inputs(self, inputs, **kwargs):
     """Initial state given inputs."""

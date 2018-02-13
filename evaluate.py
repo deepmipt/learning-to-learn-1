@@ -20,11 +20,14 @@ from __future__ import print_function
 
 from six.moves import xrange
 import tensorflow as tf
+import numpy as np
 
 from tensorflow.contrib.learn.python.learn import monitored_session as ms
 
 import meta
 import util
+
+from parade import parade# , organise_text_dataset_for_lm_task
 
 flags = tf.flags
 logging = tf.logging
@@ -40,6 +43,18 @@ flags.DEFINE_string("problem", "simple", "Type of problem.")
 flags.DEFINE_integer("num_steps", 100,
                      "Number of optimization steps per epoch.")
 flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
+flags.DEFINE_integer("batch_size", 128,
+                     "Size of a batch passed to optimizee during training")
+flags.DEFINE_string("train_dataset", None,
+                     "Path to file containing train dataset")
+flags.DEFINE_string("valid_dataset", None,
+                     "Path to file containing validation dataset")
+flags.DEFINE_boolean("parade_tokens", False,
+                     "If language model task is performed tokens have to be reordered in the way that"
+                     " that allows tf.FixedLengthRecordReader to get batch every read")
+if FLAGS.parade_tokens:
+    main_parade_path, first_batch_parade_path = parade(
+        FLAGS.train_dataset, FLAGS.batch_size, FLAGS.parade_tokens)
 
 
 def main(_):
@@ -50,8 +65,8 @@ def main(_):
     tf.set_random_seed(FLAGS.seed)
 
   # Problem.
-  problem, net_config, net_assignments = util.get_config(FLAGS.problem,
-                                                         FLAGS.path)
+  problem, net_config, net_assignments = util.get_config(FLAGS.problem, main_parade_path, first_batch_parade_path,
+                                                         path=FLAGS.path)
 
   # Optimizer setup.
   if FLAGS.optimizer == "Adam":
@@ -60,8 +75,13 @@ def main(_):
     problem_reset = tf.variables_initializer(problem_vars)
 
     optimizer = tf.train.AdamOptimizer(FLAGS.learning_rate)
+    # optimizer = tf.train.GradientDescentOptimizer(FLAGS.learning_rate)
     optimizer_reset = tf.variables_initializer(optimizer.get_slot_names())
-    update = optimizer.minimize(cost_op)
+    grads_and_vars = optimizer.compute_gradients(cost_op)
+    grads, v = zip(*grads_and_vars)
+    grads, _ = tf.clip_by_global_norm(grads, 1.)
+    update = optimizer.apply_gradients(zip(grads, v))
+    # update = optimizer.minimize(cost_op)
     reset = [problem_reset, optimizer_reset]
   elif FLAGS.optimizer == "L2L":
     if FLAGS.path is None:
@@ -78,12 +98,13 @@ def main(_):
 
     total_time = 0
     total_cost = 0
-    for _ in xrange(FLAGS.num_epochs):
+    for i in xrange(FLAGS.num_epochs):
       # Training.
       time, cost = util.run_epoch(sess, cost_op, [update], reset,
                                   num_unrolls)
       total_time += time
       total_cost += cost
+
 
     # Results.
     util.print_stats("Epoch {}".format(FLAGS.num_epochs), total_cost,
