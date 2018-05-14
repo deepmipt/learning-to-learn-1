@@ -27,7 +27,7 @@ from tensorflow.contrib.learn.python.learn import monitored_session as ms
 import meta
 import util
 
-from parade import parade# , organise_text_dataset_for_lm_task
+from parade import parade  # , organise_text_dataset_for_lm_task
 
 flags = tf.flags
 logging = tf.logging
@@ -50,7 +50,7 @@ flags.DEFINE_string("train_dataset", None,
 flags.DEFINE_string("valid_dataset", None,
                      "Path to file containing validation dataset")
 flags.DEFINE_boolean("parade_tokens", False,
-                     "If language model task is performed tokens have to be reordered in the way that"
+                     "If language model task is performed tokens have to be reordered in the way"
                      " that allows tf.FixedLengthRecordReader to get batch every read")
 if FLAGS.parade_tokens:
     main_parade_path, first_batch_parade_path = parade(

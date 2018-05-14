@@ -53,7 +53,7 @@ flags.DEFINE_string("valid_dataset", None,
                      "Path to file containing validation dataset")
 flags.DEFINE_boolean("parade_tokens", False,
                      "If language model task is performed tokens have to be reordered in the way that"
-                     " that allows tf.FixedLengthRecordReader to get batch every read")
+                     " allows tf.FixedLengthRecordReader to get batch every read")
 flags.DEFINE_integer("unroll_length", 20, "Meta-optimizer unroll length.")
 flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 flags.DEFINE_boolean("second_derivatives", False, "Use second derivatives.")
