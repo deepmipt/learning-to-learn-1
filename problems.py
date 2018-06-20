@@ -305,7 +305,7 @@ def unrolled_lstm(inputs, matrix, bias, hidden):
 
 def lstm_lm(dataset_name,
             first_batch_dataset_name,
-            hidden_size=1024,
+            hidden_size=128,
             optimizee_unrollings=10,
           batch_size=128,
           mode="train"):

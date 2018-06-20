@@ -67,9 +67,16 @@ flags.DEFINE_boolean("second_derivatives", False, "Use second derivatives.")
 # else:
 #   main_parade_path = None
 #   first_batch_parade_path = None
-if FLAGS.parade_tokens:
+if FLAGS.parade_tokens == 'False':
+    parade_tokens = False
+else:
+    parade_tokens = FLAGS.parade_tokens
+if parade_tokens:
     main_parade_path, first_batch_parade_path = parade(
         FLAGS.train_dataset, FLAGS.batch_size, True)
+else:
+    main_parade_path = None
+    first_batch_parade_path = None
 
 def main(_):
   # Configuration.
@@ -97,7 +104,8 @@ def main(_):
   with ms.MonitoredSession() as sess:
     # Prevent accidental changes to the graph.
     tf.get_default_graph().finalize()
-
+    writer = tf.summary.FileWriter('summary')
+    writer.add_graph(tf.get_default_graph())
     best_evaluation = float("inf")
     total_time = 0
     total_cost = 0
